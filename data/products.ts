@@ -1,0 +1,148 @@
+import { Product, Collection, Testimonial } from '@/types';
+
+export const products: Product[] = [
+  {
+    id: 1,
+    name: 'Signature Kaftan',
+    price: 85000,
+    description: 'Handcrafted luxury kaftan featuring intricate embroidery and flowing silhouette.',
+    category: 'Featured',
+    images: [
+      'https://images.unsplash.com/photo-1515372039744-b8f02a3ae446?w=800',
+      'https://images.unsplash.com/photo-1595777457583-95e059d581b8?w=800',
+    ],
+    sizes: ['XS', 'S', 'M', 'L', 'XL'],
+    colors: ['Ivory', 'Champagne', 'Gold'],
+    materials: 'Premium Silk Blend',
+    care: 'Dry Clean Only',
+    quantity: 50,
+  },
+  {
+    id: 2,
+    name: 'Premium Evening Dress',
+    price: 120000,
+    description: 'Stunning floor-length evening dress with delicate beading.',
+    category: 'New Arrival',
+    images: [
+      'https://images.unsplash.com/photo-1566174053879-31528523f8ae?w=800',
+      'https://images.unsplash.com/photo-1572804013309-59a88b7e92f1?w=800',
+    ],
+    sizes: ['XS', 'S', 'M', 'L'],
+    colors: ['Black', 'Navy', 'Burgundy'],
+    materials: 'Silk Chiffon',
+    care: 'Dry Clean Only',
+    quantity: 30,
+  },
+  {
+    id: 3,
+    name: 'Luxury Two-Piece Set',
+    price: 95000,
+    description: 'Sophisticated two-piece ensemble combining modern design with traditional elegance.',
+    category: 'Featured',
+    images: [
+      'https://images.unsplash.com/photo-1558769132-cb1aea458c5e?w=800',
+      'https://images.unsplash.com/photo-1434389677669-e08b4cda3bf2?w=800',
+    ],
+    sizes: ['S', 'M', 'L', 'XL'],
+    colors: ['Cream', 'Sage', 'Rose'],
+    materials: 'Linen Cotton Blend',
+    care: 'Hand Wash Cold',
+    quantity: 40,
+  },
+  {
+    id: 4,
+    name: 'Evening Collection Gown',
+    price: 150000,
+    description: 'Our signature evening gown featuring hand-sewn embellishments.',
+    category: 'Best Seller',
+    images: [
+      'https://images.unsplash.com/photo-1572804013427-4d7ca7268217?w=800',
+      'https://images.unsplash.com/photo-1583391733956-3750e0ff4e8b?w=800',
+    ],
+    sizes: ['XS', 'S', 'M', 'L'],
+    colors: ['Emerald', 'Royal Blue', 'Ruby'],
+    materials: 'Duchess Satin',
+    care: 'Professional Clean Only',
+    quantity: 20,
+  },
+  {
+    id: 5,
+    name: 'Silk Maxi Dress',
+    price: 78000,
+    description: 'Elegant silk maxi dress with a flattering wrap design.',
+    category: 'New Arrival',
+    images: [
+      'https://images.unsplash.com/photo-1595777457583-95e059d581b8?w=800',
+      'https://images.unsplash.com/photo-1515372039744-b8f02a3ae446?w=800',
+    ],
+    sizes: ['XS', 'S', 'M', 'L', 'XL'],
+    colors: ['Champagne', 'Navy', 'Black'],
+    materials: '100% Silk',
+    care: 'Dry Clean Only',
+    quantity: 35,
+  },
+  {
+    id: 6,
+    name: 'Embroidered Blazer',
+    price: 110000,
+    description: 'Tailored blazer featuring exquisite gold embroidery.',
+    category: 'Best Seller',
+    images: [
+      'https://images.unsplash.com/photo-1559563458-527698bbf179?w=800',
+      'https://images.unsplash.com/photo-1548624313-0396c75e4b1a?w=800',
+    ],
+    sizes: ['S', 'M', 'L'],
+    colors: ['Ivory', 'Black'],
+    materials: 'Wool Blend',
+    care: 'Dry Clean Only',
+    quantity: 25,
+  },
+];
+
+export const collections: Collection[] = [
+  {
+    id: 1,
+    name: 'Evening Elegance',
+    description: 'Stunning pieces for memorable evenings',
+    image: 'https://images.unsplash.com/photo-1566174053879-31528523f8ae?w=800',
+    productCount: 12,
+  },
+  {
+    id: 2,
+    name: 'Modern Heritage',
+    description: 'Contemporary designs with traditional soul',
+    image: 'https://images.unsplash.com/photo-1558769132-cb1aea458c5e?w=800',
+    productCount: 8,
+  },
+  {
+    id: 3,
+    name: 'Resort Collection',
+    description: 'Luxurious pieces for your getaway',
+    image: 'https://images.unsplash.com/photo-1515372039744-b8f02a3ae446?w=800',
+    productCount: 10,
+  },
+];
+
+export const testimonials: Testimonial[] = [
+  {
+    id: 1,
+    name: 'Amara O.',
+    location: 'Lagos',
+    rating: 5,
+    text: 'The quality exceeded my expectations. Every piece feels like it was made just for me.',
+  },
+  {
+    id: 2,
+    name: 'Ifeoma C.',
+    location: 'Abuja',
+    rating: 5,
+    text: 'Beautiful packaging and amazing fit. I felt like royalty wearing my Yohanna Signature dress.',
+  },
+  {
+    id: 3,
+    name: 'Ngozi E.',
+    location: 'London',
+    rating: 5,
+    text: 'I receive compliments every time I wear pieces from Yohanna. The craftsmanship is unparalleled.',
+  },
+];
