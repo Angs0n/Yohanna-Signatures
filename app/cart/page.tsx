@@ -63,7 +63,7 @@ export default function CartPage() {
                   </div>
                   
                   <p className="text-sm text-gray-500 mb-2">
-                    Size: {item.size} | Color: {item.color}
+                    Size: {item.selectedSize} | Color: {item.selectedColor}
                   </p>
                   
                   <p className="text-gold-800 font-semibold mb-4">

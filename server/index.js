@@ -1,351 +1,168 @@
+require('dotenv').config();
+
 const express = require('express');
 const cors = require('cors');
-const dotenv = require('dotenv');
-const path = require('path');
-const multer = require('multer');
-const nodemailer = require('nodemailer');
-const { v4: uuidv4 } = require('uuid');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const { createClient } = require('@supabase/supabase-js');
+const { z } = require('zod');
 
-dotenv.config({ path: path.join(__dirname, '..', '.env.local') });
+const required = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY'];
+const missing = required.filter((name) => !process.env[name]);
+if (missing.length) throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+const port = Number(process.env.PORT || 3001);
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
+  auth: { persistSession: false, autoRefreshToken: false },
+});
+const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:3000').split(',').map((origin) => origin.trim());
 
-// Middleware
-app.use(cors());
-app.use(express.json());
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.set('trust proxy', 1);
+app.use(helmet());
+app.use(cors({ origin(origin, callback) {
+  if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+  return callback(new Error('Origin is not allowed by CORS'));
+}, credentials: true }));
+app.use(express.json({ limit: '1mb' }));
+app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 200, standardHeaders: true, legacyHeaders: false }));
 
-// Multer setup for file uploads
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, path.join(__dirname, 'uploads'));
-  },
-  filename: (req, file, cb) => {
-    const uniqueName = `${Date.now()}-${file.originalname}`;
-    cb(null, uniqueName);
-  }
+const productSchema = z.object({
+  name: z.string().trim().min(2).max(120),
+  price: z.coerce.number().positive(),
+  description: z.string().trim().min(10).max(3000),
+  category: z.string().trim().min(2).max(60),
+  images: z.array(z.string().url()).min(1).max(5),
+  sizes: z.array(z.string().trim().min(1).max(20)).min(1).max(20),
+  colors: z.array(z.string().trim().min(1).max(40)).min(1).max(20),
+  materials: z.string().trim().max(200).default(''),
+  care: z.string().trim().max(200).default(''),
+  quantity: z.coerce.number().int().min(0).max(100000),
+});
+const checkoutSchema = z.object({
+  customer: z.object({
+    name: z.string().trim().min(2).max(120), email: z.string().email().max(255), phone: z.string().trim().min(5).max(40),
+    country: z.string().trim().min(2).max(80), state: z.string().trim().min(2).max(80), city: z.string().trim().min(2).max(80), address: z.string().trim().min(5).max(300),
+  }),
+  items: z.array(z.object({ id: z.coerce.number().int().positive(), quantity: z.coerce.number().int().min(1).max(20) })).min(1).max(20),
 });
 
-const upload = multer({ 
-  storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
-  fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith('image/')) {
-      cb(null, true);
-    } else {
-      cb(new Error('Only image files are allowed'));
-    }
-  }
-});
-
-// In-memory database (replace with real database for production)
-let products = [
-  {
-    id: 1,
-    name: 'Signature Kaftan',
-    price: 85000,
-    description: 'Handcrafted luxury kaftan featuring intricate embroidery and flowing silhouette.',
-    category: 'Featured',
-    images: ['https://images.unsplash.com/photo-1515372039744-b8f02a3ae446?w=800'],
-    sizes: ['XS', 'S', 'M', 'L', 'XL'],
-    colors: ['Ivory', 'Champagne', 'Gold'],
-    materials: 'Premium Silk Blend',
-    care: 'Dry Clean Only',
-    quantity: 50,
-    createdAt: new Date().toISOString()
-  }
-];
-
-let orders = [];
-let subscribers = [];
-let notifications = [];
-
-// Email transporter
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST || 'smtp.gmail.com',
-  port: process.env.SMTP_PORT || 587,
-  secure: false,
-  auth: {
-    user: process.env.EMAIL_USER || 'your-email@gmail.com',
-    pass: process.env.EMAIL_PASS || 'your-app-password'
-  }
-});
-
-// Send email notification
-async function sendEmailNotification(to, subject, html) {
-  try {
-    await transporter.sendMail({
-      from: `"Yohanna Signature" <${process.env.EMAIL_USER}>`,
-      to,
-      subject,
-      html
-    });
-    console.log('Email sent to:', to);
-  } catch (error) {
-    console.error('Email error:', error);
-  }
+function parse(schema, value, res) {
+  const result = schema.safeParse(value);
+  if (!result.success) { res.status(400).json({ success: false, message: 'Invalid request', errors: result.error.flatten() }); return null; }
+  return result.data;
+}
+function failure(res, error, message = 'Unexpected server error') {
+  console.error(error);
+  res.status(500).json({ success: false, message });
+}
+async function requireAdmin(req, res, next) {
+  const token = req.headers.authorization?.replace(/^Bearer\s+/i, '');
+  if (!token) return res.status(401).json({ success: false, message: 'Authentication required' });
+  const { data: { user }, error } = await supabase.auth.getUser(token);
+  if (error || !user) return res.status(401).json({ success: false, message: 'Invalid session' });
+  const { data: profile, error: profileError } = await supabase.from('profiles').select('role').eq('id', user.id).single();
+  if (profileError || profile?.role !== 'admin') return res.status(403).json({ success: false, message: 'Admin access required' });
+  req.user = user;
+  next();
 }
 
-// ============ PRODUCT ROUTES ============
+app.get('/health', (_req, res) => res.json({ ok: true }));
 
-// Get all products
-app.get('/api/products', (req, res) => {
-  const { category, search } = req.query;
-  let filtered = [...products];
-  
-  if (category && category !== 'All') {
-    filtered = filtered.filter(p => p.category === category);
-  }
-  
-  if (search) {
-    filtered = filtered.filter(p => 
-      p.name.toLowerCase().includes(search.toLowerCase())
-    );
-  }
-  
-  res.json({ success: true, data: filtered });
-});
-
-// Get single product
-app.get('/api/products/:id', (req, res) => {
-  const product = products.find(p => p.id === parseInt(req.params.id));
-  if (!product) {
-    return res.status(404).json({ success: false, message: 'Product not found' });
-  }
-  res.json({ success: true, data: product });
-});
-
-// Add product (Admin)
-app.post('/api/products', upload.array('images', 5), (req, res) => {
+app.get('/api/products', async (req, res) => {
   try {
-    const { name, price, description, category, sizes, colors, materials, care, quantity } = req.body;
-    
-    const imageUrls = req.files 
-      ? req.files.map(file => `/uploads/${file.filename}`)
-      : JSON.parse(req.body.images || '[]');
-    
-    const newProduct = {
-      id: Date.now(),
-      name,
-      price: parseFloat(price),
-      description,
-      category,
-      images: imageUrls,
-      sizes: JSON.parse(sizes || '["S","M","L"]'),
-      colors: JSON.parse(colors || '["Black"]'),
-      materials: materials || '',
-      care: care || '',
-      quantity: parseInt(quantity) || 0,
-      createdAt: new Date().toISOString()
-    };
-    
-    products.push(newProduct);
-    
-    notifications.push({
-      id: Date.now().toString(),
-      message: `New product "${name}" added`,
-      type: 'product',
-      read: false,
-      createdAt: new Date().toISOString()
-    });
-    
-    res.json({ success: true, data: newProduct });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
+    let query = supabase.from('products').select('*').eq('is_active', true).order('created_at', { ascending: false });
+    if (req.query.category && req.query.category !== 'All') query = query.eq('category', req.query.category);
+    if (req.query.search) query = query.ilike('name', `%${String(req.query.search).trim()}%`);
+    const { data, error } = await query;
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (error) { failure(res, error); }
 });
 
-// Update product (Admin)
-app.put('/api/products/:id', (req, res) => {
-  const index = products.findIndex(p => p.id === parseInt(req.params.id));
-  if (index === -1) {
-    return res.status(404).json({ success: false, message: 'Product not found' });
-  }
-  
-  products[index] = { ...products[index], ...req.body };
-  res.json({ success: true, data: products[index] });
+app.get('/api/products/:id', async (req, res) => {
+  const { data, error } = await supabase.from('products').select('*').eq('id', req.params.id).eq('is_active', true).single();
+  if (error || !data) return res.status(404).json({ success: false, message: 'Product not found' });
+  res.json({ success: true, data });
 });
 
-// Delete product (Admin)
-app.delete('/api/products/:id', (req, res) => {
-  products = products.filter(p => p.id !== parseInt(req.params.id));
-  res.json({ success: true, message: 'Product deleted' });
+app.post('/api/products', requireAdmin, async (req, res) => {
+  const product = parse(productSchema, req.body, res); if (!product) return;
+  const { data, error } = await supabase.from('products').insert(product).select().single();
+  if (error) return failure(res, error, 'Could not create product');
+  res.status(201).json({ success: true, data });
+});
+app.put('/api/products/:id', requireAdmin, async (req, res) => {
+  const product = parse(productSchema.partial(), req.body, res); if (!product) return;
+  const { data, error } = await supabase.from('products').update(product).eq('id', req.params.id).select().single();
+  if (error || !data) return res.status(404).json({ success: false, message: 'Product not found' });
+  res.json({ success: true, data });
+});
+app.delete('/api/products/:id', requireAdmin, async (req, res) => {
+  const { error } = await supabase.from('products').update({ is_active: false }).eq('id', req.params.id);
+  if (error) return failure(res, error, 'Could not delete product');
+  res.status(204).end();
 });
 
-// ============ ORDER ROUTES ============
-
-// Get all orders
-app.get('/api/orders', (req, res) => {
-  res.json({ success: true, data: orders });
-});
-
-// Create order
-app.post('/api/orders', async (req, res) => {
+app.post('/api/checkout/initialize', async (req, res) => {
+  const checkout = parse(checkoutSchema, req.body, res); if (!checkout) return;
+  if (!process.env.PAYSTACK_SECRET_KEY) return res.status(503).json({ success: false, message: 'Payments are not configured yet' });
   try {
-    const { customerInfo, items, total, paymentReference } = req.body;
-    
-    const order = {
-      id: uuidv4(),
-      orderNumber: `YOH-${Date.now()}`,
-      customerInfo,
-      items,
-      total,
-      paymentReference,
-      status: 'pending',
-      createdAt: new Date().toISOString()
-    };
-    
-    orders.push(order);
-    
-    // Add notification
-    notifications.push({
-      id: Date.now().toString(),
-      message: `New order #${order.orderNumber} from ${customerInfo.name}`,
-      type: 'order',
-      read: false,
-      createdAt: new Date().toISOString()
+    const ids = checkout.items.map((item) => item.id);
+    const { data: products, error } = await supabase.from('products').select('id,name,price,quantity').in('id', ids).eq('is_active', true);
+    if (error) throw error;
+    if (!products || products.length !== ids.length) return res.status(400).json({ success: false, message: 'One or more products are unavailable' });
+    const items = checkout.items.map((item) => {
+      const product = products.find((p) => p.id === item.id);
+      if (!product || product.quantity < item.quantity) throw new Error(`Insufficient stock for product ${item.id}`);
+      return { product_id: product.id, name: product.name, unit_price: product.price, quantity: item.quantity, line_total: product.price * item.quantity };
     });
-    
-    // Send email to admin
-    await sendEmailNotification(
-      process.env.ADMIN_EMAIL || 'admin@yohannasignature.com',
-      `New Order #${order.orderNumber}`,
-      `
-        <h2>New Order Received</h2>
-        <p><strong>Order Number:</strong> ${order.orderNumber}</p>
-        <p><strong>Customer:</strong> ${customerInfo.name}</p>
-        <p><strong>Email:</strong> ${customerInfo.email}</p>
-        <p><strong>Phone:</strong> ${customerInfo.phone}</p>
-        <p><strong>Total:</strong> ₦${total.toLocaleString()}</p>
-        <h3>Items:</h3>
-        <ul>
-          ${items.map(item => `<li>${item.name} x ${item.cartQuantity} - ₦${(item.price * item.cartQuantity).toLocaleString()}</li>`).join('')}
-        </ul>
-        <p><strong>Shipping Address:</strong></p>
-        <p>${customerInfo.address.address}, ${customerInfo.address.city}, ${customerInfo.address.state}</p>
-      `
-    );
-    
-    // Send confirmation to customer
-    await sendEmailNotification(
-      customerInfo.email,
-      `Order Confirmed - #${order.orderNumber}`,
-      `
-        <h2>Thank You for Your Order!</h2>
-        <p>Dear ${customerInfo.name},</p>
-        <p>Your order has been confirmed and is being processed.</p>
-        <p><strong>Order Number:</strong> ${order.orderNumber}</p>
-        <p><strong>Total:</strong> ₦${total.toLocaleString()}</p>
-        <p>We'll notify you when your order ships.</p>
-      `
-    );
-    
-    res.json({ success: true, data: order });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
+    const total = items.reduce((sum, item) => sum + item.line_total, 0);
+    const reference = `YOH-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+    const { data: order, error: orderError } = await supabase.from('orders').insert({ reference, customer: checkout.customer, items, total, currency: 'NGN', status: 'pending', payment_status: 'pending' }).select().single();
+    if (orderError) throw orderError;
+    const paystackResponse = await fetch('https://api.paystack.co/transaction/initialize', {
+      method: 'POST', headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: checkout.customer.email, amount: Math.round(total * 100), currency: 'NGN', reference, callback_url: `${process.env.WEB_URL}/payment/callback` }),
+    });
+    const payment = await paystackResponse.json();
+    if (!paystackResponse.ok || !payment.status) throw new Error(payment.message || 'Paystack initialization failed');
+    res.status(201).json({ success: true, data: { orderId: order.id, reference, authorizationUrl: payment.data.authorization_url } });
+  } catch (error) { failure(res, error, error.message || 'Could not start payment'); }
 });
 
-// Update order status
-app.put('/api/orders/:id/status', (req, res) => {
-  const order = orders.find(o => o.id === req.params.id);
-  if (!order) {
-    return res.status(404).json({ success: false, message: 'Order not found' });
-  }
-  
-  order.status = req.body.status;
-  order.updatedAt = new Date().toISOString();
-  
-  res.json({ success: true, data: order });
+app.get('/api/payments/verify/:reference', async (req, res) => {
+  if (!process.env.PAYSTACK_SECRET_KEY) return res.status(503).json({ success: false, message: 'Payments are not configured yet' });
+  try {
+    const { data: expectedOrder, error: orderLookupError } = await supabase.from('orders').select('id,total').eq('reference', req.params.reference).single();
+    if (orderLookupError || !expectedOrder) return res.status(404).json({ success: false, message: 'Order not found' });
+    const paystackResponse = await fetch(`https://api.paystack.co/transaction/verify/${encodeURIComponent(req.params.reference)}`, { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` } });
+    const payment = await paystackResponse.json();
+    if (!paystackResponse.ok || !payment.status) return res.status(400).json({ success: false, message: payment.message || 'Payment could not be verified' });
+    const paid = payment.data.status === 'success';
+    if (paid && (payment.data.currency !== 'NGN' || payment.data.amount !== Math.round(Number(expectedOrder.total) * 100))) {
+      return res.status(400).json({ success: false, message: 'Payment amount does not match the order' });
+    }
+    const { data: order, error } = await supabase.from('orders').update({ payment_status: paid ? 'paid' : 'failed', status: paid ? 'processing' : 'payment_failed', paid_at: paid ? new Date().toISOString() : null }).eq('reference', req.params.reference).select().single();
+    if (error || !order) throw error || new Error('Order not found');
+    res.json({ success: true, data: { order, paid } });
+  } catch (error) { failure(res, error, 'Could not verify payment'); }
 });
-
-// ============ NEWSLETTER ROUTES ============
 
 app.post('/api/subscribe', async (req, res) => {
-  try {
-    const { email } = req.body;
-    
-    if (subscribers.includes(email)) {
-      return res.json({ success: true, message: 'Already subscribed' });
-    }
-    
-    subscribers.push(email);
-    
-    // Send welcome email
-    await sendEmailNotification(
-      email,
-      'Welcome to Yohanna Signature',
-      `
-        <h2>Welcome to Yohanna Signature!</h2>
-        <p>Thank you for subscribing to our newsletter.</p>
-        <p>You'll be the first to know about new collections and exclusive offers.</p>
-      `
-    );
-    
-    res.json({ success: true, message: 'Subscribed successfully' });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
+  const email = z.string().email().safeParse(req.body?.email);
+  if (!email.success) return res.status(400).json({ success: false, message: 'A valid email is required' });
+  const { error } = await supabase.from('subscribers').upsert({ email: email.data }, { onConflict: 'email', ignoreDuplicates: true });
+  if (error) return failure(res, error, 'Could not subscribe');
+  res.status(201).json({ success: true, message: 'Subscribed successfully' });
 });
-
-// ============ CONTACT ROUTES ============
-
 app.post('/api/contact', async (req, res) => {
-  try {
-    const { name, email, subject, message } = req.body;
-    
-    await sendEmailNotification(
-      process.env.ADMIN_EMAIL || 'admin@yohannasignature.com',
-      `Contact Form: ${subject}`,
-      `
-        <h2>New Contact Form Submission</h2>
-        <p><strong>From:</strong> ${name}</p>
-        <p><strong>Email:</strong> ${email}</p>
-        <p><strong>Subject:</strong> ${subject}</p>
-        <p><strong>Message:</strong></p>
-        <p>${message}</p>
-      `
-    );
-    
-    res.json({ success: true, message: 'Message sent successfully' });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
+  const contact = z.object({ name: z.string().trim().min(2).max(120), email: z.string().email(), subject: z.string().trim().min(2).max(180), message: z.string().trim().min(5).max(5000) }).safeParse(req.body);
+  if (!contact.success) return res.status(400).json({ success: false, message: 'Please complete every contact field' });
+  const { error } = await supabase.from('contact_messages').insert(contact.data);
+  if (error) return failure(res, error, 'Could not send message');
+  res.status(201).json({ success: true, message: 'Message received' });
 });
 
-// ============ NOTIFICATION ROUTES ============
-
-app.get('/api/notifications', (req, res) => {
-  res.json({ success: true, data: notifications });
-});
-
-app.put('/api/notifications/:id/read', (req, res) => {
-  const notification = notifications.find(n => n.id === req.params.id);
-  if (notification) {
-    notification.read = true;
-  }
-  res.json({ success: true });
-});
-
-// ============ UPLOAD ROUTE ============
-
-app.post('/api/upload', upload.single('image'), (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ success: false, message: 'No file uploaded' });
-  }
-  res.json({ 
-    success: true, 
-    url: `/uploads/${req.file.filename}` 
-  });
-});
-
-// Serve static files from Next.js in production
-if (process.env.NODE_ENV === 'production') {
-  app.use(express.static(path.join(__dirname, '..', '.next')));
-}
-
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`API available at http://localhost:${PORT}/api`);
-});
+app.use((error, _req, res, _next) => { console.error(error); res.status(500).json({ success: false, message: 'Unexpected server error' }); });
+app.listen(port, '0.0.0.0', () => console.log(`Yohanna API listening on ${port}`));
